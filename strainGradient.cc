@@ -98,8 +98,8 @@ elasticity<dim>::elasticity (NURBSMesh<dim>& _mesh, std::string& _filePrefix, pa
   dt=1.0/numIncrements;
   //output variables
   outputVariables.push_back(&displacement);
-  outputVariables.push_back(&derivedValueP);
-  outputVariables.push_back(&derivedValueR);
+  outputVariables.push_back(&derivedValueP);//Pyy
+  outputVariables.push_back(&derivedValueR);//Residual
 }
 
 /*assemble_system
@@ -199,7 +199,7 @@ void elasticity<dim>::assemble_system_interval (const typename std::vector<knotS
 template <int dim>
 void elasticity<dim>::solve (){
   double res=1, tol=1.0e-8, abs_tol=1.0e-11, initial_norm=0, current_norm=0;
-  currentIteration=0;//interation mark in Newton method
+  currentIteration=0;//interation marker for Newton method
   double oldNorm=1;
   while (true){
     if ((currentIteration>=20) or (res<1.0e-15)){printf ("Maximum number of iterations reached without convergence. \n"); break; exit (1);}
@@ -267,6 +267,7 @@ void elasticity<dim>::mark_boundaries(){
 
 /*mark_lines
  * Mark line that parallel to cell edge. 
+ * Marking rule is similar to marking boundary surfaces.
  * Following code marks twelve/four boundary edges. 
  */
 template <int dim>
@@ -327,7 +328,7 @@ void elasticity<dim>::apply_boundary_conditions(){
     if (coords[2]==0.0) {
        dirichletMap[controlPointDOF+2]=0.0;
     }
-    //mark specific cell and the components(x,y,z) that have variable to output.
+    //Store specific cell and the components(x,y,z) that have variable to output.
     if ((coords[1]==0.0) and (coords[2]==0.0)){
       outputMap[coords[0]]=controlPointDOF+1;
     }
@@ -362,7 +363,6 @@ void elasticity<dim>::condenseKandRHS(){
 
 /*setupCellValues
  * Set up fe_value of each cell.
- * Normally no need here.
  */
 template <int dim>
 void elasticity<dim>::setupCellValues(){
