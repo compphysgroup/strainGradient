@@ -1,3 +1,13 @@
+/*mechanics.h
+ * Mechanics implementation on cell/element level.
+ * Every function is on cell/element level.
+ * Calculate F(deformation gradient tensor), P(Piola-Kirchhoff stress tensor), B(higher-order stress tensor) , freeEnergy.
+ * Implement weak dirichlet condition.
+ *--------------------------------------------
+ * Things may need to take a look:
+ * 1.material model
+ * 2.Form of Newmann boundary condition
+ */
 #ifndef MECHANICS_H_
 #define MECHANICS_H_
 #include "igaClasses.h"
@@ -7,10 +17,13 @@
 #include "solutionClasses.h"
 #include "parameters.h"
 
-//Mechanics implementation
+/*getDeformationMapWithGradient
+ * Calculate F, and it's inverse and derivatives.
+ */
 template <class T, int dim>
   void getDeformationMapWithGradient(IGAValues<dim>& fe_values, unsigned int DOF, dealii::Table<1, T>& ULocal, deformationMapwithGrad<T, dim>& defMap, const unsigned int iteration, int faceID=-1){
   //unsigned int dofs_per_cell= fe_values.dofs_per_cell;
+  //defaulting setting is faceID=-1 and this function is for normal quadrature point.
   unsigned int n_q_points= (faceID>-1) ?  fe_values.n_face_quadrature_points : fe_values.n_quadrature_points;
 
   //evaluate dx/dX
@@ -20,11 +33,12 @@ template <class T, int dim>
   evaluateVectorFunctionSecondGradient<T, dim>(fe_values, DOF, ULocal, GradGradU, faceID);
 	
   //Loop over quadrature points
+  //F=GradU + I; derivatives of F=GradGradU
   for (unsigned int q=0; q<n_q_points; ++q){
     dealii::Table<2, T > Fq(dim, dim), invFq(dim, dim); T detFq;
     for (unsigned int i=0; i<dim; ++i){
       for (unsigned int j=0; j<dim; ++j){
-	defMap.F[q][i][j] = Fq[i][j] = (i==j) + GradU[q][i][j]; //F (as double value)
+	defMap.F[q][i][j] = Fq[i][j] = (i==j) + GradU[q][i][j]; //F (as double value);
 	for (unsigned int k=0; k<dim; ++k){
 	  defMap.gradF[q][i][j][k] = GradGradU[q][i][j][k]; //gradF 
 	}
@@ -50,7 +64,9 @@ template <class T, int dim>
   }
 }
 
-//Mechanics implementation
+/*evaluateStress
+ * Calculate strain tensor E, P, B and free energy.
+ */
 template <class T, int dim>
   void evaluateStress(IGAValues<dim>& fe_values, const unsigned int DOF, bool finiteStrain, dealii::Table<3, T>& P, dealii::Table<4, T>& Beta, unsigned int currentIteration, double& freeEnergy, double& interfacEnergy, parametersClass* params, dealii::Table<1, Sacado::Fad::DFad<double> >& ULocal, solutionClass<dim>* derivedValueP, unsigned int cellID,  int faceID=-1){
   //unsigned int dofs_per_cell= fe_values.dofs_per_cell;
@@ -61,7 +77,7 @@ template <class T, int dim>
   
   //Loop over quadrature points
   for (unsigned int q=0; q<n_q_points; ++q){    
-    //Compute F
+    //get F and it's derivatives explicitly
     T F[dim][dim], dF[dim][dim][dim];
     for (unsigned int i=0; i<dim; i++) {
       for (unsigned int j=0; j<dim; j++) {
@@ -71,7 +87,7 @@ template <class T, int dim>
 	}
       }
     }
-    //Compute strain metric, E  (E=0.5*(F^T*F-I))
+    //Compute strain metric, E (E=0.5*(F^T*F-I)), it's derivatives (dE=2*F:dF) and some other values.
     T E[dim][dim], dE[dim][dim][dim], trE=0.0, trE2=0.0;
     for (unsigned int I=0; I<dim; I++){
       for (unsigned int J=0; J<dim; J++){
@@ -79,34 +95,38 @@ template <class T, int dim>
 	for (unsigned int k=0; k<dim; k++){
 	  E[I][J] += 0.5*F[k][I]*F[k][J];
 	}
+	//compute derivatives of F
 	for (unsigned int K=0; K<dim; K++){
 	  dE[I][J][K]=0.0;
 	  for (unsigned int k=0; k<dim; k++){
 	    dE[I][J][K] += 0.5*(F[k][I]*dF[k][J][K]+F[k][J]*dF[k][I][K]);
 	  }
 	}
-	trE2 += E[I][J]* E[I][J];	
+	trE2 += E[I][J]* E[I][J];//E:E
       }
-      trE +=E[I][I];   
+      trE +=E[I][I];//E:E
     }
 
-    //infinitesimal strain implementation
+    //infinitesimal strain implementation( finiteStrain==false)
+    //F=I (identity tensor); E=dx/dX
     if (!finiteStrain){
       trE=0.0; trE2=0.0;
       for (unsigned int i=0; i<dim; i++) {
 	for (unsigned int j=0; j<dim; j++) {
 	  F[i][j]=(i==j);	
-	  E[i][j]=defMap.F[q][i][j] - (i==j);
+	  E[i][j]=defMap.F[q][i][j] - (i==j);//defMap.F=I + GradU
 	  for (unsigned int k=0; k<dim; k++) {
-	    dE[i][j][k]=defMap.gradF[q][i][j][k];
+	    dE[i][j][k]=defMap.gradF[q][i][j][k];//GradGradU[q][i][j][k]
 	  }
-	  trE2 += E[i][j]*E[i][j];	
+	  trE2 += E[i][j]*E[i][j];//E:E	
 	}
-	trE +=E[i][i];   
+	trE +=E[i][i]; //E:E  
       }
     }
 
     //compute P and Beta
+    //standard St. Venant-Kirchhoff model for P
+    //W (E, GradE) =1/2*(λ)*(Eaa)^2 + μ*(Eab * Eab) + 1/2*μ*l*(Eab,c * Eab,c)
     double lambda= params->getDouble("lambda");
     double mu=  params->getDouble("mu");
     double muSG= params->getDouble("muSG");
@@ -124,6 +144,8 @@ template <class T, int dim>
 	}
       }
     }
+    
+    //store certain values for output
     if (faceID==-1) {
       (*derivedValueP)(cellID,q)=P[q][dim-2][dim-2].val();
     }
@@ -144,7 +166,11 @@ template <class T, int dim>
   }
 }
 
-//Mechanics residual implementation
+/*residualForMechanics
+ * Mechanics residual R implementation
+ * Applying Neumann boundary conditions 
+ * Applying Weak dirichlet boundary condition
+ */
 template <int dim>
 void residualForMechanics(IGAValues<dim>& fe_values, unsigned int DOF, bool finiteStrain, dealii::Table<1, Sacado::Fad::DFad<double> >& ULocal, dealii::Table<1, double>& ULocalConv, dealii::Table<1, Sacado::Fad::DFad<double> >& R, unsigned int currentIteration, double& freeEnergy, double& interfaceEnergy, double& dirchletBC, knotSpan<dim>& cell, unsigned int NumKnotInterval, parametersClass* params, NURBSMesh<dim>* mesh, solutionClass<dim>* derivedValueP){
   
@@ -154,7 +180,7 @@ void residualForMechanics(IGAValues<dim>& fe_values, unsigned int DOF, bool fini
   dealii::Table<3,Sacado::Fad::DFad<double> > P (n_q_points, dim, dim);
   dealii::Table<4,Sacado::Fad::DFad<double> > Beta (n_q_points, dim, dim, dim);
   
-  //evaluate mechanics
+  //evaluate mechanics parameters
   evaluateStress<Sacado::Fad::DFad<double>, dim>(fe_values, DOF, finiteStrain, P, Beta, currentIteration, freeEnergy, interfaceEnergy, params, ULocal, derivedValueP, cell.id);
   
   //evaluate Residual
@@ -162,7 +188,7 @@ void residualForMechanics(IGAValues<dim>& fe_values, unsigned int DOF, bool fini
     R[dof] = 0;
     const unsigned int ck = fe_values.system_to_component_index(dof) - DOF;
     if (ck>=0 && ck<dim){
-      // R = Grad(w)*P
+      // R = Grad(w)*P +GradGrad(w)*B
       for (unsigned int q=0; q<n_q_points; ++q){
 	for (unsigned int J = 0; J < dim; J++){
 	  R[dof] +=  fe_values.shape_grad(dof, q)[J]*P[q][ck][J]*fe_values.JxW(q);
@@ -178,10 +204,11 @@ void residualForMechanics(IGAValues<dim>& fe_values, unsigned int DOF, bool fini
   double load= params->getDouble("load"); 
   const char* bcType= params->getString("bcType").c_str();
   
+  //loop over boundary faces
   for (unsigned int faceID=0; faceID<2*dim; faceID++){
     if (cell.boundaryFlags[faceID]>0){      
-      //loop over boundary faces
       for (unsigned int dof=0; dof<dofs_per_cell; ++dof) {
+	//ck:specific dof of node. DOF make using flexible such at each node has many dof addition to three displacements.
 	const unsigned int ck = fe_values.system_to_component_index(dof) - DOF;
 	for (unsigned int q=0; q<fe_values.n_face_quadrature_points; ++q){
 	  if (std::strcmp(bcType,"bending")==0){
@@ -245,6 +272,7 @@ void residualForMechanics(IGAValues<dim>& fe_values, unsigned int DOF, bool fini
   }
 
   //Weak dirichlet condition grad(u).n=0
+  //C: positive penalty parameter; he: characteristic mesh size parameter.
   if (params->getBool("enforceWeakBC")){ 
     double muSG= params->getDouble("muSG");
     double l= params->getDouble("l");
